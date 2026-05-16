@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>YouTube Comment Toxicity Analyzer</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --border: #1e1e2e;
+      --text: #e8e8f0;
+      --muted: #6b6b8a;
+      --love: #ff6b9d;
+      --hate: #ff4757;
+      --neutral: #a0a0c0;
+      --sarcasm: #ffa502;
+      --accent: #7c6fff;
+      --green: #2ed573;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Syne', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    /* ── Noise texture overlay ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 48px 24px;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ── Header ── */
+    header {
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .badge {
+      display: inline-block;
+      background: rgba(124, 111, 255, 0.12);
+      border: 1px solid rgba(124, 111, 255, 0.3);
+      color: var(--accent);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      padding: 4px 12px;
+      border-radius: 100px;
+      letter-spacing: 0.1em;
+      margin-bottom: 20px;
+    }
+
+    h1 {
+      font-size: clamp(28px, 5vw, 52px);
+      font-weight: 800;
+      line-height: 1.1;
+      letter-spacing: -0.02em;
+      margin-bottom: 12px;
+    }
+
+    h1 span { color: var(--accent); }
+
+    .subtitle {
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 400;
+    }
+
+    /* ── Input Section ── */
+    .input-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 28px;
+      margin-bottom: 32px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 18px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 14px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: var(--accent);
+    }
+
+    input[type="text"]::placeholder { color: var(--muted); }
+
+    button#analyze-btn {
+      background: var(--accent);
+      border: none;
+      border-radius: 10px;
+      padding: 14px 28px;
+      color: white;
+      font-family: 'Syne', sans-serif;
+      font-weight: 700;
+      font-size: 14px;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      white-space: nowrap;
+    }
+
+    button#analyze-btn:hover { opacity: 0.85; }
+    button#analyze-btn:active { transform: scale(0.98); }
+    button#analyze-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .error-msg {
+      color: var(--hate);
+      font-size: 13px;
+      margin-top: 10px;
+      font-family: 'DM Mono', monospace;
+      display: none;
+    }
+
+    /* ── Loading ── */
+    .loading {
+      display: none;
+      text-align: center;
+      padding: 48px;
+    }
+
+    .spinner {
+      width: 36px;
+      height: 36px;
+      border: 3px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin: 0 auto 16px;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .loading p {
+      color: var(--muted);
+      font-size: 14px;
+      font-family: 'DM Mono', monospace;
+    }
+
+    /* ── Dashboard ── */
+    #results { display: none; }
+
+    .dashboard {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    @media (max-width: 600px) {
+      .dashboard { grid-template-columns: 1fr; }
+      .input-row { flex-direction: column; }
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 24px;
+    }
+
+    .stat-card .label {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 8px;
+    }
+
+    .stat-card .value {
+      font-size: 36px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .toxicity-bar-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 24px;
+      grid-column: 1 / -1;
+    }
+
+    .toxicity-bar-wrap .label {
+      font-size: 11px;
+      font-family: 'DM Mono', monospace;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .toxicity-bar-wrap .label span {
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .bar-track {
+      background: var(--border);
+      border-radius: 100px;
+      height: 10px;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      border-radius: 100px;
+      transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+      background: linear-gradient(90deg, var(--green), var(--sarcasm), var(--hate));
+    }
+
+    /* ── Sentiment Breakdown ── */
+    .breakdown {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 24px;
+      margin-bottom: 24px;
+    }
+
+    .breakdown-title {
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+    }
+
+    .breakdown-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .breakdown-row .lbl {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      width: 60px;
+    }
+
+    .breakdown-row .track {
+      flex: 1;
+      background: var(--border);
+      border-radius: 100px;
+      height: 6px;
+      overflow: hidden;
+    }
+
+    .breakdown-row .fill {
+      height: 100%;
+      border-radius: 100px;
+      transition: width 1s ease;
+    }
+
+    .breakdown-row .pct {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--muted);
+      width: 40px;
+      text-align: right;
+    }
+
+    /* ── Comments List ── */
+    .comments-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .comments-header h3 {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .cached-badge {
+      display: none;
+      background: rgba(46, 213, 115, 0.12);
+      border: 1px solid rgba(46, 213, 115, 0.3);
+      color: var(--green);
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      padding: 3px 10px;
+      border-radius: 100px;
+    }
+
+    .filter-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .filter-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 100px;
+      padding: 6px 16px;
+      color: var(--muted);
+      font-family: 'Syne', sans-serif;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .filter-btn.active, .filter-btn:hover {
+      border-color: var(--accent);
+      color: var(--text);
+    }
+
+    .comment-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 10px;
+      animation: fadeUp 0.3s ease both;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .comment-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .sentiment-pill {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      font-weight: 500;
+      padding: 3px 10px;
+      border-radius: 100px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .pill-love    { background: rgba(255,107,157,0.12); color: var(--love); border: 1px solid rgba(255,107,157,0.3); }
+    .pill-hate    { background: rgba(255,71,87,0.12);   color: var(--hate); border: 1px solid rgba(255,71,87,0.3); }
+    .pill-neutral { background: rgba(160,160,192,0.1);  color: var(--neutral); border: 1px solid rgba(160,160,192,0.2); }
+    .pill-sarcasm { background: rgba(255,165,2,0.12);   color: var(--sarcasm); border: 1px solid rgba(255,165,2,0.3); }
+
+    .confidence {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .comment-text {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text);
+    }
+
+    .comment-author {
+      font-size: 11px;
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      margin-top: 8px;
+    }
+
+    /* ── Pagination ── */
+    .pagination {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 24px;
+    }
+
+    .page-btn {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      color: var(--text);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .page-btn:hover, .page-btn.active {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .page-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <header>
+    <div class="badge">NLP · MULTILINGUAL · REAL-TIME</div>
+    <h1>YouTube <span>Toxicity</span><br/>Analyzer</h1>
+    <p class="subtitle">Paste any YouTube URL. Get instant sentiment & toxicity breakdown.</p>
+  </header>
+
+  <!-- Input -->
+  <div class="input-card">
+    <div class="input-row">
+      <input type="text" id="url-input"
+        placeholder="https://www.youtube.com/watch?v=..."
+        autocomplete="off"/>
+      <button id="analyze-btn" onclick="analyze()">Analyze →</button>
+    </div>
+    <p class="error-msg" id="error-msg"></p>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>Fetching comments & running sentiment analysis...</p>
+  </div>
+
+  <!-- Results -->
+  <div id="results">
+
+    <!-- Dashboard -->
+    <div class="dashboard">
+      <div class="stat-card">
+        <div class="label">Comments Analyzed</div>
+        <div class="value" id="total-comments">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Most Common Sentiment</div>
+        <div class="value" id="top-sentiment" style="font-size:24px">—</div>
+      </div>
+      <div class="toxicity-bar-wrap">
+        <div class="label">
+          Overall Toxicity Score
+          <span id="toxicity-score-label">0 / 100</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" id="toxicity-bar" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sentiment Breakdown -->
+    <div class="breakdown">
+      <div class="breakdown-title">Sentiment Breakdown</div>
+      <div class="breakdown-row">
+        <span class="lbl" style="color:var(--love)">Love</span>
+        <div class="track"><div class="fill" id="bar-love" style="width:0%;background:var(--love)"></div></div>
+        <span class="pct" id="pct-love">0%</span>
+      </div>
+      <div class="breakdown-row">
+        <span class="lbl" style="color:var(--hate)">Hate</span>
+        <div class="track"><div class="fill" id="bar-hate" style="width:0%;background:var(--hate)"></div></div>
+        <span class="pct" id="pct-hate">0%</span>
+      </div>
+      <div class="breakdown-row">
+        <span class="lbl" style="color:var(--neutral)">Neutral</span>
+        <div class="track"><div class="fill" id="bar-neutral" style="width:0%;background:var(--neutral)"></div></div>
+        <span class="pct" id="pct-neutral">0%</span>
+      </div>
+      <div class="breakdown-row">
+        <span class="lbl" style="color:var(--sarcasm)">Sarcasm</span>
+        <div class="track"><div class="fill" id="bar-sarcasm" style="width:0%;background:var(--sarcasm)"></div></div>
+        <span class="pct" id="pct-sarcasm">0%</span>
+      </div>
+    </div>
+
+    <!-- Comments -->
+    <div class="comments-header">
+      <h3>Comments</h3>
+      <span class="cached-badge" id="cached-badge">⚡ Cached Result</span>
+    </div>
+
+    <div class="filter-row">
+      <button class="filter-btn active" onclick="filterComments('all', this)">All</button>
+      <button class="filter-btn" onclick="filterComments('Love', this)">❤️ Love</button>
+      <button class="filter-btn" onclick="filterComments('Hate', this)">🔥 Hate</button>
+      <button class="filter-btn" onclick="filterComments('Neutral', this)">😐 Neutral</button>
+      <button class="filter-btn" onclick="filterComments('Sarcasm', this)">😏 Sarcasm</button>
+    </div>
+
+    <div id="comments-list"></div>
+
+    <div class="pagination" id="pagination"></div>
+  </div>
+
+</div>
+
+<script>
+  let allComments = [];
+  let filteredComments = [];
+  let currentPage = 1;
+  const PAGE_SIZE = 15;
+  let currentFilter = 'all';
+
+  async function analyze() {
+    const url = document.getElementById('url-input').value.trim();
+    const errEl = document.getElementById('error-msg');
+    const btn = document.getElementById('analyze-btn');
+
+    errEl.style.display = 'none';
+    if (!url) { showError('Please enter a YouTube URL.'); return; }
+
+    btn.disabled = true;
+    btn.textContent = 'Analyzing...';
+    document.getElementById('loading').style.display = 'block';
+    document.getElementById('results').style.display = 'none';
+
+    try {
+      const res = await fetch('/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        showError(data.error || 'Something went wrong.');
+        return;
+      }
+
+      renderResults(data, res.headers.get('X-Cache') === 'HIT' || data.cached);
+
+    } catch (e) {
+      showError('Network error. Please try again.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Analyze →';
+      document.getElementById('loading').style.display = 'none';
+    }
+  }
+
+  function renderResults(data, isCached) {
+    document.getElementById('results').style.display = 'block';
+
+    // Stats
+    document.getElementById('total-comments').textContent = data.total_comments;
+
+    const pct = data.label_percentages;
+    const top = Object.entries(pct).sort((a, b) => b[1] - a[1])[0];
+    const emojiMap = { Love: '❤️ Love', Hate: '🔥 Hate', Neutral: '😐 Neutral', Sarcasm: '😏 Sarcasm' };
+    document.getElementById('top-sentiment').textContent = emojiMap[top[0]] || top[0];
+
+    // Toxicity bar
+    const score = data.toxicity_score;
+    document.getElementById('toxicity-score-label').textContent = `${score} / 100`;
+    setTimeout(() => {
+      document.getElementById('toxicity-bar').style.width = score + '%';
+    }, 100);
+
+    // Breakdown bars
+    ['love', 'hate', 'neutral', 'sarcasm'].forEach(l => {
+      const cap = l.charAt(0).toUpperCase() + l.slice(1);
+      const v = pct[cap] || 0;
+      setTimeout(() => {
+        document.getElementById(`bar-${l}`).style.width = v + '%';
+      }, 150);
+      document.getElementById(`pct-${l}`).textContent = v + '%';
+    });
+
+    // Cached badge
+    document.getElementById('cached-badge').style.display = isCached ? 'inline-block' : 'none';
+
+    // Comments
+    allComments = data.comments;
+    currentFilter = 'all';
+    currentPage = 1;
+    applyFilter();
+  }
+
+  function filterComments(label, btn) {
+    currentFilter = label;
+    currentPage = 1;
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    applyFilter();
+  }
+
+  function applyFilter() {
+    filteredComments = currentFilter === 'all'
+      ? allComments
+      : allComments.filter(c => c.sentiment.label === currentFilter);
+    renderPage();
+  }
+
+  function renderPage() {
+    const list = document.getElementById('comments-list');
+    const start = (currentPage - 1) * PAGE_SIZE;
+    const page = filteredComments.slice(start, start + PAGE_SIZE);
+
+    list.innerHTML = page.map((c, i) => `
+      <div class="comment-card" style="animation-delay:${i * 30}ms">
+        <div class="comment-meta">
+          <span class="sentiment-pill pill-${c.sentiment.color}">${c.sentiment.label}</span>
+          <span class="confidence">${c.sentiment.confidence}% confident</span>
+        </div>
+        <div class="comment-text">${escapeHtml(c.text)}</div>
+        <div class="comment-author">@${escapeHtml(c.author)} · ${c.published}</div>
+      </div>
+    `).join('');
+
+    renderPagination();
+  }
+
+  function renderPagination() {
+    const total = Math.ceil(filteredComments.length / PAGE_SIZE);
+    const pg = document.getElementById('pagination');
+    if (total <= 1) { pg.innerHTML = ''; return; }
+
+    let html = `<button class="page-btn" onclick="goPage(${currentPage-1})" ${currentPage===1?'disabled':''}>← Prev</button>`;
+    for (let i = 1; i <= total; i++) {
+      if (i === 1 || i === total || Math.abs(i - currentPage) <= 1) {
+        html += `<button class="page-btn ${i===currentPage?'active':''}" onclick="goPage(${i})">${i}</button>`;
+      } else if (Math.abs(i - currentPage) === 2) {
+        html += `<span style="color:var(--muted);padding:8px 4px">…</span>`;
+      }
+    }
+    html += `<button class="page-btn" onclick="goPage(${currentPage+1})" ${currentPage===total?'disabled':''}>Next →</button>`;
+    pg.innerHTML = html;
+  }
+
+  function goPage(n) {
+    currentPage = n;
+    renderPage();
+    window.scrollTo({ top: document.getElementById('comments-list').offsetTop - 80, behavior: 'smooth' });
+  }
+
+  function showError(msg) {
+    const el = document.getElementById('error-msg');
+    el.textContent = msg;
+    el.style.display = 'block';
+    document.getElementById('loading').style.display = 'none';
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  document.getElementById('url-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') analyze();
+  });
+</script>
+</body>
+</html>
